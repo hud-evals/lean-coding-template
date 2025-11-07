@@ -11,7 +11,7 @@ import os
 # Ensure MCP tools do not load during import
 os.environ["MCP_TESTING_MODE"] = "0"
 
-import hud_controller.app as app
+import server.main as app
 
 
 def main() -> int:

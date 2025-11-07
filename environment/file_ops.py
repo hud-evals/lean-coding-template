@@ -1,10 +1,9 @@
-from collections import defaultdict
-from pathlib import Path
-from typing import Literal, get_args
-from dataclasses import dataclass
-from collections import deque
 import shlex
 import subprocess
+from collections import defaultdict, deque
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Literal, get_args
 
 from .base import CLIResult, ToolError, ToolResult
 from .run import demote, maybe_truncate, run
@@ -22,28 +21,16 @@ SNIPPET_LINES: int = 4
 
 MAX_RESPONSE_LEN: int = 16000
 
-class EditTool:
-    """
-    An filesystem editor tool that allows the agent to view, create, and edit files.
-    The tool parameters are defined by Anthropic and are not editable.
-    """
+class FileOpsManager:
+    """Manages file operations with history tracking for the environment server."""
 
     _file_history: dict[Path, list[str]]
 
     def __init__(self, run_command_preexec_fn=demote):
-        """
-        Initialize the EditTool.
-        
-        Args:
-            run_command_preexec_fn: Function to run in child process before executing 
-                                   shell commands via the run() utility.
-                                   Defaults to demote() which drops privileges to uid/gid 1000.
-                                   Pass None to skip preexec, or any callable for custom behavior.
-        """
         self._file_history = defaultdict(list)
         self._run_command_preexec_fn = run_command_preexec_fn
 
-    async def __call__(
+    async def execute(
         self,
         *,
         command: Command,
@@ -84,18 +71,15 @@ class EditTool:
         """
         Check that the path/command combination is valid.
         """
-        # Check if its an absolute path
         if not path.is_absolute():
             suggested_path = Path("") / path
             raise ToolError(
                 f"The path {path} is not an absolute path, it should start with `/`. Maybe you meant {suggested_path}?"
             )
-        # Check if path exists
         if not path.exists() and command != "create":
             raise ToolError(f"The path {path} does not exist. Please provide a valid path.")
         if path.exists() and command == "create":
             raise ToolError(f"File already exists at: {path}. Cannot overwrite files using command `create`.")
-        # Check if the path points to a directory
         if path.is_dir():
             if command != "view":
                 raise ToolError(
@@ -135,20 +119,18 @@ class EditTool:
                 raise ToolError(
                     f"Invalid `view_range`: {view_range}. Its second element `{final_line}` should be larger or equal than its first `{init_line}`"
                 )
-            
-            # Extract only the requested lines
+
             if final_line != -1:
                 selected_lines = file_text_lines[max(view_range[0] - 1, 0) : view_range[1]]
             else:
                 selected_lines = file_text_lines[max(view_range[0] - 1, 0) :]
-            # Join without modifying the original line endings
             file_content = "".join(selected_lines)
 
         file_content = process_view_output_str(
             file_text=file_content,
             path=str(path),
             total_path_lines=n_lines_file,
-            max_resp_ln=MAX_RESPONSE_LEN, 
+            max_resp_ln=MAX_RESPONSE_LEN,
             view_range=(view_range[0], view_range[1]) if view_range else None,
         )
 
@@ -156,12 +138,10 @@ class EditTool:
 
     async def str_replace(self, path: Path, old_str: str, new_str: str | None):
         """Implement the str_replace command, which replaces old_str with new_str in the file content"""
-        # Read the file content
         file_content = (await self.read_file(path, truncate_after=1_000_000_000)).expandtabs()
         old_str = old_str.expandtabs()
         new_str = new_str.expandtabs() if new_str is not None else ""
 
-        # Check if old_str is unique in the file
         occurrences = file_content.count(old_str)
         if occurrences == 0:
             raise ToolError(f"No replacement was performed, old_str `{old_str}` did not appear verbatim in {path}.")
@@ -172,22 +152,17 @@ class EditTool:
                 f"No replacement was performed. Multiple occurrences of old_str `{old_str}` in lines {lines}. Please ensure it is unique"
             )
 
-        # Replace old_str with new_str
         new_file_content = file_content.replace(old_str, new_str)
 
-        # Write the new content to the file
         await self.write_file(path, new_file_content)
 
-        # Save the content to history
         self._file_history[path].append(file_content)
 
-        # Create a snippet of the edited section
         replacement_line = file_content.split(old_str)[0].count("\n")
         start_line = max(0, replacement_line - SNIPPET_LINES)
         end_line = replacement_line + SNIPPET_LINES + new_str.count("\n")
         snippet = "\n".join(new_file_content.split("\n")[start_line : end_line + 1])
 
-        # Prepare the success message
         success_msg = f"The file {path} has been edited. "
         success_msg += self._make_output(snippet, f"a snippet of {path}", start_line + 1)
         success_msg += "Review the changes and make sure they are as expected. Edit the file again if necessary."
@@ -272,8 +247,6 @@ class EditTool:
         return f"Here's the result of running `cat -n` on {file_descriptor}:\n" + file_content + "\n"
 
 
-### AUX utilities
-
 def add_line_numbers(
     text: str, includes_final_line: bool, n_first_line: int = 1
 ) -> str:
@@ -292,7 +265,6 @@ def add_line_numbers(
         for ind, line_with_ending in enumerate(lines_with_endings)
     ]
 
-    # Add an extra empty line with line number if original text ends with newline
     if includes_final_line and text.endswith(("\n", "\r\n", "\r")):
         result.append(f"{len(lines_with_endings) + n_first_line:6}\t")
 
@@ -306,31 +278,26 @@ def process_view_output_str(
     max_resp_ln: int,
     view_range: tuple[int, int] | None = None,
 ) -> str:
-    # Get header
     header = f"Here's the content of {path} with line numbers"
     if total_path_lines is not None and view_range is not None:
         header += f" (which has a total of {total_path_lines} lines) with view_range={list(view_range)}"
 
-    # See if final line is included in the view_range
     if view_range is None or view_range[1] == -1 or view_range[1] == total_path_lines:
         includes_final_line = True
     else:
         includes_final_line = False
     n_first_line = view_range[0] if view_range is not None else 1
 
-    # Truncate if needed
     maybe_truncated_str = truncate_from_middle_v2(
         ss=file_text, max_len=max_resp_ln, n_line_offset=n_first_line - 1
     )
     if isinstance(maybe_truncated_str, str):
-        # No truncation
         file_text_with_line_numbers = add_line_numbers(
             file_text,
             includes_final_line=includes_final_line,
             n_first_line=n_first_line,
         )
     else:
-        # Truncation occurred
         before_with_line_numbers = add_line_numbers(
             text="".join(maybe_truncated_str.as_str(maybe_truncated_str.before_lines)),
             includes_final_line=False,
@@ -351,31 +318,25 @@ def process_view_output_str(
                 + f"\t{maybe_truncated_str.truncation_msg}"
                 + after_with_line_numbers
             )
-        
-        # Add context-aware truncation message
+
         if view_range is not None:
-            # User already using view_range, suggest adjusting it
             truncation_note = "\n<response clipped><NOTE>To save on context only part of the view range has been shown. You can adjust the view_range parameters or use `grep -n` to find specific content.</NOTE>"
         else:
-            # User viewing whole file, suggest view_range or grep
             truncation_note = "\n<response clipped><NOTE>To save on context only part of this file has been shown to you. You can use view_range=[start_line, end_line] to see specific sections, or use `grep -n` to find what you're looking for.</NOTE>"
-        
+
         file_text_with_line_numbers += truncation_note
 
     return f"{header}:\n{file_text_with_line_numbers}"
 
 @dataclass
 class TruncatedString:
-    # Blocks
     before_lines: list[str]
     middle_lines: list[str]
     after_lines: list[str]
 
-    # Line numbers (starting from 1)
     truncated_start_line: int
     truncated_end_line: int
 
-    # Truncation msg
     truncation_msg: str
     single_line: bool
 
@@ -394,11 +355,9 @@ def truncate_from_middle_v2(
     If no truncation is needed, returns the original string.
     If truncation is needed, returns TruncatedString
     """
-    # No truncation needed
     if len(ss) <= max_len:
         return ss
 
-    # Single line
     lines_with_endings = ss.splitlines(True)
     if len(lines_with_endings) == 1:
         chars_per_side = max(1, max_len // 2)
@@ -417,13 +376,11 @@ def truncate_from_middle_v2(
             single_line=True,
         )
 
-    # Line truncation
     current_len = 0
     before_lines = []
     middle_lines = deque(lines_with_endings)
     after_lines = deque([])
     while current_len < max_len and len(middle_lines) > 1:
-        # Before
         before_candidate_line = middle_lines[0]
         if len(before_candidate_line) + current_len <= max_len:
             before_lines.append(middle_lines.popleft())
@@ -431,7 +388,6 @@ def truncate_from_middle_v2(
         else:
             break
 
-        # After
         if len(middle_lines) > 1:
             after_candidate_line = middle_lines[-1]
             if len(after_candidate_line) + current_len <= max_len:
@@ -440,13 +396,11 @@ def truncate_from_middle_v2(
         else:
             break
 
-    # Find truncated lines
     first_truncated_line = 1 + len(before_lines) + n_line_offset
     last_truncated_line = first_truncated_line + len(middle_lines) - 1
     if ss.endswith(("\n", "\r", "\r\n")) and len(after_lines) == 0:
         last_truncated_line += 1
 
-    # Create truncation msg
     if first_truncated_line == last_truncated_line:
         truncation_msg = f"< truncated line {first_truncated_line} >"
     else:
@@ -462,14 +416,11 @@ def truncate_from_middle_v2(
             truncation_msg += "\n"
 
     return TruncatedString(
-        # Blocks
         before_lines=before_lines,
         middle_lines=list(middle_lines),
         after_lines=list(after_lines),
-        # Line numbers (starting from 1)
         truncated_start_line=first_truncated_line,
         truncated_end_line=last_truncated_line,
-        # Truncation msg
         truncation_msg=truncation_msg,
         single_line=False,
     )

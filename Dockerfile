@@ -164,7 +164,8 @@ FROM setup AS runtime
 RUN pip install uv --break-system-packages
 
 # copy python files
-COPY ./src /mcp_server/src
+COPY ./environment /mcp_server/environment
+COPY ./server /mcp_server/server
 COPY ./pyproject.toml /mcp_server/pyproject.toml
 COPY ./README.md /mcp_server/README.md
 
@@ -192,4 +193,6 @@ ENV HINTS=$HINTS
 ARG PROBLEM_ID
 ENV PROBLEM_ID=$PROBLEM_ID
 
-CMD ["hud_eval"]
+ENV ENV_SERVER_PORT=8000
+
+CMD ["sh", "-c", "cd /mcp_server && uvicorn environment.server:app --host 0.0.0.0 --port $ENV_SERVER_PORT --log-level warning >&2 & sleep 2 && exec hud_eval"]

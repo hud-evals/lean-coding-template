@@ -18,7 +18,7 @@ class Service:
     """Representation of a single service definition."""
 
     name: str
-    type: str = "process"  # process | scripted | internal
+    type: str = "process"
     command: Optional[str] = None
     logfile: Optional[str] = None
     depends_on: list[str] = field(default_factory=list)
@@ -31,9 +31,6 @@ class ServiceLoader:
         self.root_dir = root_dir
         self.services: dict[str, Service] = {}
 
-    # -------------------------------------------------------------
-    # Public API
-    # -------------------------------------------------------------
     def load_all(self) -> dict[str, Service]:
         """Load every service definition found under *root_dir*."""
         logger.info("Loading service definitions from %s", self.root_dir)
@@ -46,14 +43,10 @@ class ServiceLoader:
                 self._load_service_file(svc_file)
         return self.services
 
-    # -------------------------------------------------------------
-    # Internal helpers
-    # -------------------------------------------------------------
     def _load_service_file(self, filepath: Path, *, explicit_name: Optional[str] = None) -> None:
         logger.debug("Parsing service definition file %s", filepath)
         name = explicit_name or filepath.name
         if name in self.services:
-            # Already loaded – avoid duplicating effort or clobbering data.
             logger.debug("Service %s already loaded, skipping", name)
             return
 
@@ -63,20 +56,17 @@ class ServiceLoader:
         svc_type = raw_config.get("type", ["process"])[0]
         command = raw_config.get("command", [None])[-1]
         logfile = raw_config.get("logfile", [None])[-1]
-        depends_on = list(raw_config.get("depends-on", []))  # copy
-        # Handle the `waits-for` directive as additional dependencies
+        depends_on = list(raw_config.get("depends-on", []))
         for wf in raw_config.get("waits-for", []):
             logger.debug("Service %s declares waits-for dependency %s", name, wf)
             depends_on.append(wf)
 
-        # Handle the special `waits-for.d` directive (only legal for type=internal)
         if svc_type.lower() == "internal" and "waits-for.d" in raw_config:
             waits_dir_rel = raw_config["waits-for.d"][-1]
             waits_dir = (self.root_dir / waits_dir_rel).resolve()
             if not waits_dir.is_dir():
                 raise ServiceError(f"Service '{name}' references unknown directory '{waits_dir_rel}'.")
             logger.debug("Service %s is internal; scanning directory %s for dependencies", name, waits_dir)
-            # Every file in the directory becomes an implicit dependency.
             for sub_file in waits_dir.iterdir():
                 if sub_file.is_file():
                     if sub_file.name.endswith(".sh"):
@@ -96,12 +86,10 @@ class ServiceLoader:
         logger.info("Registered service %s (type=%s) with dependencies %s", name, svc_type, depends_on)
         self.services[name] = svc
 
-        # Recursively load dependencies declared via `depends-on`.
         for dep_name in depends_on:
             logger.debug("Service %s declares dependency %s", name, dep_name)
             dep_path = self.root_dir / dep_name
             if not dep_path.exists():
-                # Dependency might have already been loaded from a waits_for dir
                 if dep_name not in self.services:
                     logger.error("Service '%s' depends on missing service '%s'", name, dep_name)
                     raise ServiceError(f"Service '{name}' depends on missing service '{dep_name}'.")
@@ -109,7 +97,6 @@ class ServiceLoader:
                 logger.debug("Loading explicit dependency file %s for service %s", dep_path, name)
                 self._load_service_file(dep_path)
 
-        # Enforce that services which produce output define a logfile (requirement #2)
         if svc_type.lower() in {"process", "scripted"} and logfile is None:
             logger.error("Service '%s' of type '%s' has no logfile", name, svc_type)
             raise ServiceError(f"Service '{name}' of type '{svc_type}' must specify a logfile.")
@@ -142,36 +129,27 @@ class SimpleDinit:
         self._starting: set[str] = set()
         self._processes: dict[str, subprocess.Popen[bytes]] = {}
 
-    # -------------------------------------------------------------
-    # Public API
-    # -------------------------------------------------------------
     def start(self, service_name: str) -> None:
         if service_name not in self._services:
             raise ServiceError(f"Unknown service '{service_name}'.")
         self._start_recursive(service_name)
 
-    # -------------------------------------------------------------
-    # Internal helpers
-    # -------------------------------------------------------------
     def _start_recursive(self, name: str) -> None:
         if name in self._started:
-            return  # Nothing to do.
+            return
         if name in self._starting:
             raise ServiceError(f"Circular dependency detected at '{name}'.")
 
         self._starting.add(name)
         svc = self._services[name]
-        # Log dependency resolution
         logger.debug("Resolving dependencies for service '%s': %s", name, svc.depends_on)
         for dep in svc.depends_on:
             logger.debug("Service '%s' depends on '%s'; starting dependency", name, dep)
             self._start_recursive(dep)
 
         logger.info("Starting service '%s' (type=%s)...", name, svc.type)
-        # Log dispatch decision before handling service type
         logger.debug("Dispatching service '%s' to handler for type '%s'", name, svc.type)
         if svc.type == "internal":
-            # Nothing to launch – success if we reached this point.
             pass
         elif svc.type == "scripted":
             self._run_scripted(svc)
@@ -192,7 +170,6 @@ class SimpleDinit:
             path.parent.mkdir(parents=True, exist_ok=True)
             return path
         except OSError as exc:
-            # Fall back to current directory.
             logger.warning(
                 "Unable to create log directory for '%s' (reason: %s). Falling back to local file.",
                 logfile_path,
@@ -233,16 +210,11 @@ class SimpleDinit:
                 stderr=subprocess.STDOUT,
             )
             self._processes[svc.name] = proc
-            # pause for 0.5 seconds to ensure the process is running
             time.sleep(0.5)
         except Exception as exc:
             logger.error("Unable to launch service '%s': %s", svc.name, exc)
             raise ServiceError(f"Unable to launch service '{svc.name}': {exc}")
 
-
-# ---------------------------------------------------------------------------
-# CLI entry-point
-# ---------------------------------------------------------------------------
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Tiny subset of the Dinit service manager (start-only). Command-line entry mainly for testing.")
@@ -273,4 +245,4 @@ def main(argv: Optional[list[str]] = None) -> None:
 
 
 if __name__ == "__main__":
-    main() 
+    main()

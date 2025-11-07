@@ -34,16 +34,16 @@ from typing import Literal, get_args
 # Ensure MCP tools do not load during import
 os.environ["MCP_TESTING_MODE"] = "0"
 
-from hud_controller.app import spec_to_statement
-import hud_controller.problems
-from hud_controller.spec import PROBLEM_REGISTRY, ReviewLevel
-from hud_controller.utils import import_submodules
+import server.problems
+from server.main import spec_to_statement
+from server.spec import PROBLEM_REGISTRY, ReviewLevel
+from server.utils import import_submodules
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
 # Import all extractors so their @problem decorators register specs
-import_submodules(hud_controller.problems)
+import_submodules(server.problems)
 
 
 def repo_root() -> str:

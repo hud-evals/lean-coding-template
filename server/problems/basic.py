@@ -1,6 +1,6 @@
 import logging
 
-from hud_controller.spec import ProblemSpec, PROBLEM_REGISTRY
+from server.spec import ProblemSpec, PROBLEM_REGISTRY
 
 logger = logging.getLogger(__name__)
 

@@ -28,7 +28,6 @@ class Grade:
         return np.clip(score, 0.0, 1.0)
 
 
-# the different levels of review
 ReviewLevel = Literal[
     "no-review",
     "creator-reviewed",
@@ -40,22 +39,17 @@ ReviewLevel = Literal[
 @dataclass
 class HintSpec:
     hint_type: Literal["legit", "leaky"]
-    # the text of the hint (provided to the model)
     text: str
-    # the reason why the hint is legitimate (for human reviewers)
     why_legitmate: str | None = None
 
 
-# New registry machinery
 @dataclass
 class ProblemSpec:
-    # required fields (no defaults)
     id: str
     description: str
     base: str
     test: str
     golden: str
-    # optional fields (with defaults)
     hints: list[HintSpec] = field(default_factory=list)
     difficulty: str = "easy"
     task_type: str = "coding"
@@ -67,5 +61,4 @@ class ProblemSpec:
 
 
 
-# global list of all registered problems
 PROBLEM_REGISTRY: list[ProblemSpec] = []

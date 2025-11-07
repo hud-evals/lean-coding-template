@@ -33,7 +33,6 @@ class ToolResult:
         return replace(self, **kwargs)
 
 
-# QUESTION(simon): What's our intent behind differentiating here?
 class CLIResult(ToolResult):
     """A ToolResult that can be rendered as a CLI output."""
 
